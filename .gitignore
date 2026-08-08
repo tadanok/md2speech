@@ -1,0 +1,17 @@
+# 書籍原稿・変換元テキスト
+*.md
+!README.md
+*.txt
+!requirements.txt
+
+# 生成された音声ファイル・中間生成物
+*.mp3
+tts_parts/
+chapters/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
