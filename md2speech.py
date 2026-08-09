@@ -10,6 +10,7 @@
 """
 
 import base64
+import hashlib
 import json
 import os
 import re
@@ -124,6 +125,59 @@ def sanitize_filename(name: str) -> str:
     return INVALID_FILENAME_RE.sub("_", name).strip()
 
 
+def extract_book_title(markdown_text: str) -> str:
+    """最初の H1 見出しを書籍名として抽出する。"""
+    match = re.search(r"^#\s+(.+)$", markdown_text, re.M)
+    if not match:
+        return ""
+    return match.group(1).strip()
+
+
+def build_output_name(src_path: str, markdown_text: str) -> str:
+    """Markdown の H1 見出しがあれば、それをベースに出力名を作る。"""
+    title = extract_book_title(markdown_text)
+    if title:
+        safe_title = sanitize_filename(title)
+        if safe_title:
+            return f"{safe_title}.mp3"
+    return os.path.splitext(os.path.basename(src_path))[0] + ".mp3"
+
+
+def chunk_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def load_manifest(path: str) -> dict:
+    if not os.path.exists(path):
+        return {"version": 1, "parts": {}}
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_manifest(path: str, manifest: dict) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+
+
+def get_part_generation_plan(chunks: list, part_dir: str, manifest_path: str) -> list:
+    manifest = load_manifest(manifest_path)
+    stored_parts = manifest.get("parts", {})
+    plan = []
+    for i, chunk in enumerate(chunks, 1):
+        part_name = f"part{i:03d}.mp3"
+        part_path = os.path.join(part_dir, part_name)
+        chunk_id = chunk_hash(chunk)
+        stored_hash = stored_parts.get(part_name, {}).get("chunk_hash")
+        should_generate = (
+            not os.path.exists(part_path)
+            or os.path.getsize(part_path) <= 0
+            or stored_hash != chunk_id
+        )
+        plan.append((part_path, should_generate, chunk_id))
+    return plan
+
+
 def confirm_overwrite(paths: list) -> None:
     """既に存在する出力ファイルがあれば一覧表示し、上書き(削除)してよいか確認する。"""
     existing = [p for p in paths if os.path.exists(p)]
@@ -135,6 +189,17 @@ def confirm_overwrite(paths: list) -> None:
     answer = input("続行しますか? [y/n]: ").strip().lower()
     if answer not in ("y", "yes"):
         sys.exit("中断しました。既存ファイルは変更していません。")
+
+
+def reset_output_dirs(part_dir: str, chapters_dir: str) -> None:
+    """前回実行時の中間ファイルや章別出力を削除して、クリーンな状態に戻す。"""
+    for directory in [part_dir, chapters_dir]:
+        if os.path.exists(directory):
+            for entry in os.listdir(directory):
+                path = os.path.join(directory, entry)
+                if os.path.isdir(path):
+                    continue
+                os.remove(path)
 
 
 def main():
@@ -160,10 +225,10 @@ def main():
     total_chars = sum(len(c) for c in chunks)
     print(f"{len(chapters)} 章 / {len(chunks)} 個のチャンクに分割しました (合計 {total_chars:,} 文字)")
 
-    out = os.path.splitext(os.path.basename(src))[0] + ".mp3"
+    markdown_text = open(src, encoding="utf-8").read()
+    out = build_output_name(src, markdown_text)
     has_real_chapters = len(chapters) > 1 or chapters[0][0]
 
-    chapters_dir = "chapters"
     chapter_out_paths = []
     if has_real_chapters:
         digits = len(str(len(chapters)))
@@ -175,19 +240,27 @@ def main():
     confirm_overwrite([out] + chapter_out_paths)
 
     part_dir = "tts_parts"
+    chapters_dir = "chapters"
     os.makedirs(part_dir, exist_ok=True)
+    os.makedirs(chapters_dir, exist_ok=True)
+    reset_output_dirs(part_dir, chapters_dir)
+    manifest_path = os.path.join(part_dir, "manifest.json")
 
+    part_plan = get_part_generation_plan(chunks, part_dir, manifest_path)
+    manifest = {"version": 1, "parts": {}}
     part_files = []
-    for i, chunk in enumerate(chunks, 1):
-        part = os.path.join(part_dir, f"part{i:03d}.mp3")
+    for i, (part, should_generate, chunk_id) in enumerate(part_plan, 1):
         part_files.append(part)
-        if os.path.exists(part) and os.path.getsize(part) > 0:
-            print(f"[{i}/{len(chunks)}] スキップ (作成済み)")
+        if not should_generate:
+            print(f"[{i}/{len(chunks)}] スキップ (内容未変更)")
             continue
-        print(f"[{i}/{len(chunks)}] 変換中... ({len(chunk.encode('utf-8')):,} バイト)")
-        audio = synthesize(chunk, api_key)
+        print(f"[{i}/{len(chunks)}] 変換中... ({len(chunks[i - 1].encode('utf-8')):,} バイト)")
+        audio = synthesize(chunks[i - 1], api_key)
         with open(part, "wb") as f:
             f.write(audio)
+        manifest["parts"][os.path.basename(part)] = {"chunk_hash": chunk_id}
+
+    save_manifest(manifest_path, manifest)
 
     # 章ごとに使うパートファイルの範囲 (part_files のスライス) を求める
     chapter_part_ranges, idx = [], 0
