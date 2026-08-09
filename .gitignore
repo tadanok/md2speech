@@ -1,17 +1,9 @@
-# 書籍原稿・変換元テキスト
-*.md
+# 配布に必要なファイル以外をすべて除外
+*
+
+# 配布対象
+!.gitignore
+!LICENSE
 !README.md
-*.txt
+!md2speech.py
 !requirements.txt
-
-# 生成された音声ファイル・中間生成物
-*.mp3
-tts_parts/
-chapters/
-
-# macOS
-.DS_Store
-
-# Python
-__pycache__/
-*.pyc

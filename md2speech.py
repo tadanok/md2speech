@@ -229,6 +229,8 @@ def main():
     out = build_output_name(src, markdown_text)
     has_real_chapters = len(chapters) > 1 or chapters[0][0]
 
+    part_dir = "tts_parts"
+    chapters_dir = "chapters"
     chapter_out_paths = []
     if has_real_chapters:
         digits = len(str(len(chapters)))
@@ -238,9 +240,6 @@ def main():
 
     # API呼び出し(課金)の前に、既存の出力ファイルを上書きしてよいか確認する
     confirm_overwrite([out] + chapter_out_paths)
-
-    part_dir = "tts_parts"
-    chapters_dir = "chapters"
     os.makedirs(part_dir, exist_ok=True)
     os.makedirs(chapters_dir, exist_ok=True)
     reset_output_dirs(part_dir, chapters_dir)
